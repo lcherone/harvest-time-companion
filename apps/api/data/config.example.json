@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "harvest": {
+    "accountId": "123456",
+    "userAgent": "HarvestTime Backend (dev@example.com)",
+    "timezone": "Europe/London",
+    "apiBaseUrl": "https://api.harvestapp.com/v2",
+    "authBaseUrl": "https://id.getharvest.com",
+    "redirectUri": "http://127.0.0.1:8787/auth/harvest/callback",
+    "oauthTokenStorePath": ".harvest-time/oauth-token.json"
+  },
+  "matching": {
+    "ticketKeyRegex": "\\b[A-Z][A-Z0-9]+-\\d+\\b",
+    "jiraHosts": ["*.atlassian.net", "atlassian.net", "jira.*", "*.jira.*", "jira.example.test"],
+    "githubHosts": ["github.com", "www.github.com", "github.example.test"],
+    "genericWorkDomains": ["docs.example.test", "support.example.test"]
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "logLevel": "info"
+  }
+}
