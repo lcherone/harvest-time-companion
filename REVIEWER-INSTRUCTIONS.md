@@ -1,10 +1,5 @@
 # Chrome Web Store Reviewer Instructions
 
-Replace `https://github.com/lcherone/harvest-time-companion` after publishing this folder as its own public
-repository. Paste the section below into the Chrome Web Store **Test instructions** field.
-
----
-
 HarvestTime is an internal time-entry assistant that uses a companion API running locally on the
 user's computer. The API binds only to `http://127.0.0.1:8787`; it is not a remote data service.
 
