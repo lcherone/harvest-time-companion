@@ -7,5 +7,9 @@ Never commit `.env`, `.harvest-time/`, `apps/api/data/config.json`,
 `apps/api/data/auth.local.json`, daily JSON files, OAuth tokens, Jira tokens, or extension signing
 keys.
 
-Report security issues privately to `lawrence@d3r.com`. Do not include credentials,
-tokens, browser history, or customer data in a public issue.
+Automatic updates accept only a fast-forward from the configured Git upstream and stop when
+tracked files have local changes. For maximum control, run `npm run start` instead of
+`npm run start:auto` and install updates manually.
+
+Report security issues privately to `lawrence@d3r.com`. Do not include credentials, tokens,
+browser history, or customer data in a public issue.

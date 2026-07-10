@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches:
+      - master
       - main
 
 jobs:
@@ -17,3 +18,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run smoke
+      - run: node scripts/supervisor.mjs --help
+      - run: node scripts/install-service.mjs --help
