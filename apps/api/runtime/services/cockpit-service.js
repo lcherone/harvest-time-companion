@@ -187,6 +187,25 @@ export class CockpitService {
         store.state.lastError = null;
         return this.saveAndReturnState(store);
     }
+    async dismissDailyReviewSuggestion(entryId) {
+        const store = await this.store.load();
+        if (store.dismissedReviewEntryIds.includes(entryId)) {
+            return this.toCockpitState(store);
+        }
+        const suggestion = this.getHistoryReviewEntries(store).find((entry) => entry.id === entryId);
+        if (suggestion) {
+            store.dismissedReviewEntryIds.push(entryId);
+            store.state.lastError = null;
+            return this.saveAndReturnState(store);
+        }
+        if (this.getHarvestReviewEntries(store).some((entry) => entry.id === entryId)) {
+            throw new HttpError(409, "HARVEST_ENTRY_CANNOT_BE_DISMISSED", "Entries submitted to Harvest cannot be removed from Daily entries");
+        }
+        if (this.getManualReviewEntries(store).some((entry) => entry.id === entryId)) {
+            throw new HttpError(409, "MANUAL_ENTRY_REMOVE_ROUTE_REQUIRED", "Manual Daily entries must be removed through the manual entry action");
+        }
+        throw new HttpError(404, "REVIEW_SUGGESTION_NOT_FOUND", "Daily entry suggestion was not found");
+    }
     async startOrSwitchDetected(input = {}) {
         const store = await this.store.load();
         const context = await this.getTrackableStartContext(store, input.contextId);
@@ -643,13 +662,12 @@ export class CockpitService {
         catch {
             return store;
         }
+        const remoteEntries = response.timeEntries.filter((entry) => entry.spent_date === store.date && Number.isInteger(entry.id) && entry.id > 0);
         let changed = false;
-        for (const entry of response.timeEntries) {
-            if (entry.spent_date !== store.date) {
-                continue;
-            }
+        for (const entry of remoteEntries) {
             changed = this.upsertImportedHarvestTimeEntry(store, entry) || changed;
         }
+        changed = reconcileHarvestSnapshot(store, remoteEntries) || changed;
         return changed ? this.store.save(store) : store;
     }
     upsertImportedHarvestTimeEntry(store, entry) {
@@ -732,6 +750,9 @@ export class CockpitService {
                         importEvent: "stop"
                     }
                 }) || changed;
+        }
+        else {
+            changed = removeImportedHarvestStopEvents(store, entryId) || changed;
         }
         if (entry.is_running && shouldUseImportedRunningTimer(store.state.runningTimer, timer)) {
             if (!areRecordsEqual(store.state.runningTimer, timer)) {
@@ -955,6 +976,7 @@ export class CockpitService {
             doDailyReviewEntriesOverlap(entry, harvestEntry)));
         const timesheetUpdateStartMs = getTimesheetUpdateStartMs(harvestEntries);
         const historyEntries = this.getHistoryReviewEntries(store)
+            .filter((entry) => !store.dismissedReviewEntryIds.includes(entry.id))
             .map((entry) => isTimesheetUpdateReviewEntry(entry, timesheetUpdateStartMs)
             ? {
                 ...entry,
@@ -1683,6 +1705,33 @@ function upsertImportedHarvestTimelineEvent(store, importedEvent) {
         return false;
     }
     Object.assign(existingEvent, nextEvent);
+    return true;
+}
+function removeImportedHarvestStopEvents(store, entryId) {
+    const nextEvents = store.events.filter((event) => !(event.type === "timer-stopped" && isTimelineEventLinkedToEntry(event, entryId)));
+    if (nextEvents.length === store.events.length) {
+        return false;
+    }
+    store.events = nextEvents;
+    return true;
+}
+function reconcileHarvestSnapshot(store, remoteEntries) {
+    const remoteEntryIds = new Set(remoteEntries.map((entry) => `harvest-${entry.id}`));
+    const staleEntryIds = new Set(store.harvestEntries
+        .filter((entry) => entry.backend === "harvest" && !remoteEntryIds.has(entry.entryId))
+        .map((entry) => entry.entryId));
+    if (staleEntryIds.size === 0) {
+        return false;
+    }
+    store.harvestEntries = store.harvestEntries.filter((entry) => !staleEntryIds.has(entry.entryId));
+    store.events = store.events.filter((event) => {
+        const linkedEntryId = event.entryId ?? event.timer?.entryId;
+        return !linkedEntryId || !staleEntryIds.has(linkedEntryId) || event.type === "timer-error";
+    });
+    store.state.resumeStack = store.state.resumeStack.filter((entry) => !staleEntryIds.has(entry.entryId));
+    if (store.state.runningTimer && staleEntryIds.has(store.state.runningTimer.entryId)) {
+        store.state.runningTimer = null;
+    }
     return true;
 }
 function shouldUseImportedRunningTimer(currentTimer, importedTimer) {

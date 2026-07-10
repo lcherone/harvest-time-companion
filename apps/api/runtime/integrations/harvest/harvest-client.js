@@ -137,7 +137,8 @@ export class HarvestClient {
             query: {
                 from: query.from,
                 to: query.to,
-                is_running: query.isRunning
+                is_running: query.isRunning,
+                per_page: 2000
             }
         });
         return TimeEntriesResponseSchema.parse({

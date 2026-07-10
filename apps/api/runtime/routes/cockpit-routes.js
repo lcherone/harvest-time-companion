@@ -1,4 +1,4 @@
-import { apiRoutes, BrowserHistoryPayloadSchema, ClipboardTicketEvidencePayloadSchema, CockpitStateSchema, CreateManualDailyEntryRequestSchema, ManualDailyEntryIdParamsSchema, ManualDailyEntryOptionsResponseSchema, StartTimerRequestSchema, TabEventPayloadSchema, TimelineEventIdParamsSchema, UpdateTimelineEventRequestSchema } from "@harvest-time/shared";
+import { apiRoutes, BrowserHistoryPayloadSchema, ClipboardTicketEvidencePayloadSchema, CockpitStateSchema, CreateManualDailyEntryRequestSchema, DailyReviewEntryIdParamsSchema, ManualDailyEntryIdParamsSchema, ManualDailyEntryOptionsResponseSchema, StartTimerRequestSchema, TabEventPayloadSchema, TimelineEventIdParamsSchema, UpdateTimelineEventRequestSchema } from "@harvest-time/shared";
 export const cockpitRoutes = async (app, options) => {
     app.get(apiRoutes.cockpit.state, async () => {
         return CockpitStateSchema.parse(await options.cockpitService.getState());
@@ -25,6 +25,10 @@ export const cockpitRoutes = async (app, options) => {
     app.delete(apiRoutes.cockpit.review.manualEntry(), async (request) => {
         const params = ManualDailyEntryIdParamsSchema.parse(request.params);
         return CockpitStateSchema.parse(await options.cockpitService.removeManualDailyEntry(params.id));
+    });
+    app.delete(apiRoutes.cockpit.review.dismissSuggestion(), async (request) => {
+        const params = DailyReviewEntryIdParamsSchema.parse(request.params);
+        return CockpitStateSchema.parse(await options.cockpitService.dismissDailyReviewSuggestion(params.id));
     });
     app.patch(apiRoutes.cockpit.timeline.updateEvent(), async (request) => {
         const params = TimelineEventIdParamsSchema.parse(request.params);

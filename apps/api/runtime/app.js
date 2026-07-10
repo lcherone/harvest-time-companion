@@ -36,7 +36,8 @@ export async function buildApp(options = {}) {
     });
     const harvestAuthService = new HarvestAuthService({
         backendConfigService,
-        config
+        config,
+        fetchImpl: options.harvestAuthFetchImpl
     });
     const harvestClient = options.harvestClient ??
         new HarvestClient({

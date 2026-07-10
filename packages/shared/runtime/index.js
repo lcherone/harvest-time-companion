@@ -16,7 +16,8 @@ export const apiRoutes = {
         review: {
             manualEntryOptions: "/api/review/manual-entry-options",
             manualEntries: "/api/review/manual-entries",
-            manualEntry: (id = ":id") => `/api/review/manual-entries/${id}`
+            manualEntry: (id = ":id") => `/api/review/manual-entries/${id}`,
+            dismissSuggestion: (id = ":id") => `/api/review/suggestions/${id}`
         },
         timer: {
             start: "/api/timer/start",
@@ -444,6 +445,9 @@ export const ManualDailyReviewEntrySchema = z.object({
     updatedAt: isoDateTimeSchema
 });
 export const ManualDailyEntryIdParamsSchema = z.object({
+    id: z.string().trim().min(1)
+});
+export const DailyReviewEntryIdParamsSchema = z.object({
     id: z.string().trim().min(1)
 });
 export const StartTimerRequestSchema = z
