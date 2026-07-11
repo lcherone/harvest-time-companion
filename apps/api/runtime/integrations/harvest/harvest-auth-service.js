@@ -78,6 +78,7 @@ export class HarvestAuthService {
     config;
     fetchImpl;
     now;
+    onDisconnect;
     pendingStates = new Set();
     stateFactory;
     tokenStore;
@@ -87,6 +88,7 @@ export class HarvestAuthService {
         this.config = options.config;
         this.fetchImpl = options.fetchImpl ?? fetch;
         this.now = options.now ?? (() => new Date());
+        this.onDisconnect = options.onDisconnect;
         this.stateFactory = options.stateFactory ?? randomUUID;
         this.tokenStore =
             options.tokenStore ?? new HarvestOAuthTokenStore(options.config.HARVEST_TOKEN_STORE_PATH);
@@ -121,7 +123,15 @@ export class HarvestAuthService {
         return this.getStatus();
     }
     async disconnect() {
-        await this.tokenStore.delete();
+        if (this.config.HARVEST_ACCESS_TOKEN) {
+            throw new HttpError(409, "HARVEST_AUTH_ENV_MANAGED", "Harvest credentials are managed by environment variables and cannot be cleared in Settings");
+        }
+        await Promise.all([
+            this.tokenStore.delete(),
+            this.backendConfigService?.disconnectHarvest(),
+            this.onDisconnect?.()
+        ]);
+        this.pendingStates.clear();
         return this.getStatus();
     }
     async getApiCredentials() {

@@ -38,6 +38,7 @@ server:
 | **Credential isolation**     | Harvest OAuth/PAT and optional Jira credentials never need to live in Chrome sync storage.                          |
 | **Durable workday state**    | Suggestions, manual entries, dismissed noise, timer history, and resume targets survive panel and browser restarts. |
 | **Harvest reconciliation**   | Running, edited, restarted, stopped, and deleted Harvest entries are reflected back into the side panel.            |
+| **Resilient live reads**     | Account- and query-scoped snapshots keep task choices and today’s entries usable through brief transient failures.  |
 | **Review generation**        | Same-day evidence becomes ticket-sized suggestions rather than a raw URL log.                                       |
 | **Background operation**     | A per-user service starts at login and updates safely without an open terminal.                                     |
 | **Inspectable installation** | It is an ordinary local checkout with documented npm commands, local files, policies, and an uninstall path.        |
@@ -55,6 +56,8 @@ Reliability is protected at several levels:
 
 - unit tests cover shared contracts, configuration, context detection, stores, timer adapters, and
   Harvest/Jira integrations;
+- cache tests cover account/query isolation, corrupt-file recovery, transient Harvest failures,
+  authentication boundaries, and the prohibition on substituting cached data for failed writes;
 - injected-client route tests exercise authentication, validation, setup, timer, review, timeline,
   and Harvest actions without using real credentials or the public network;
 - Playwright tests the compiled extension and its user-visible actions in Chromium, including
@@ -94,9 +97,10 @@ existing Harvest entries into one Daily entries workflow.
   <img src="screenshots/daily-review.png" width="500" alt="Daily entries powered by HarvestTime Companion" />
 </p>
 
-Every row has independent time, Harvest project, task type, and notes controls. A developer can
-correct a suggestion; a designer can move it to the right project; either can remove unrelated
-noise before it reaches a timesheet.
+Every row has independent time, Harvest project, task type, and notes controls. Rows remain compact
+while scanning the day, and one editor expands at a time; switching rows preserves in-progress
+drafts. A developer can correct a suggestion; a designer can move it to the right project; either
+can remove unrelated noise before it reaches a timesheet.
 
 Start and End fields are keyboard-friendly. Enter `12:30` directly, use shorthand such as `930`,
 or leave End blank to create a running Harvest timer. Existing Harvest rows are protected from the
@@ -125,7 +129,10 @@ On each side-panel refresh, today’s Harvest list is treated as authoritative:
 - a timer restarted in Harvest becomes the active local timer;
 - stale stop events are removed after a restart;
 - entries deleted in Harvest disappear locally;
-- an unavailable Harvest request leaves the last usable local state intact.
+- a transient network, rate-limit, timeout, or Harvest server failure may return the matching
+  validated local read snapshot for task assignments or time entries;
+- rejected credentials never fall back to cached data, and mutations always remain live—cached
+  data can never claim that a create, update, or timer action succeeded.
 
 ### Optional Jira detail
 
@@ -140,10 +147,15 @@ entries, local detection, timer operations, and Harvest submission continue to w
 </p>
 
 The extension explains what is processed and where credentials live. If the companion stops, the
-normal work UI is replaced with a focused recovery screen instead of failing silently.
+normal work UI is replaced with a friendly reconnect screen instead of failing silently. A fresh
+install sees Welcome and an in-panel Getting Started guide rather than a connection error.
 
 <p align="center">
   <img src="screenshots/server-unreachable.png" width="500" alt="HarvestTime companion unavailable recovery screen" />
+</p>
+
+<p align="center">
+  <img src="screenshots/getting-started.png" width="500" alt="HarvestTime first-run companion installation and health-check guide" />
 </p>
 
 ## One-time installation
@@ -217,12 +229,21 @@ extension receives only the product state it needs to render and act on.
 
 ## First run and mock mode
 
-A clean install starts in mock mode. No Harvest or Jira credentials are required to open the side
-panel and understand the workflow. Mock mode uses local deterministic timer entries and is safe for
-evaluation or Chrome Web Store review.
+A clean extension install first opens Getting Started when it has not connected to the companion.
+The guide includes the platform installers, service health commands, the latest-release link, and a
+**Check connection** action. It remains available from Settings and from reconnect troubleshooting.
+
+After the companion connects, a clean install starts in mock mode. No Harvest or Jira credentials
+are required to understand the workflow. Mock mode uses local deterministic timer entries and is
+safe for evaluation or Chrome Web Store review.
 
 When you are ready for live time tracking, configure Harvest and explicitly choose the live setup
 path in the extension.
+
+When you need to disconnect later, Settings provides a confirmed **Log out of Harvest** action. It
+clears locally managed OAuth/PAT credentials, the selected account, and the validated Harvest read
+cache before returning the extension to Mock mode with OAuth setup available again. It never
+deletes or edits remote Harvest entries.
 
 ## Connect a Harvest account
 
@@ -294,18 +315,18 @@ Run these inside the companion directory, or use
 
 ## Local files
 
-| Data                            | Default location                           |
-| ------------------------------- | ------------------------------------------ |
-| Companion application           | `~/.harvest-time/companion/`               |
-| Daily activity and review state | `~/.harvest-time/companion/apps/api/data/` |
-| OAuth token store               | `~/.harvest-time/companion/.harvest-time/` |
-| Optional environment settings   | `~/.harvest-time/companion/.env`           |
+| Data                                                               | Default location                           |
+| ------------------------------------------------------------------ | ------------------------------------------ |
+| Companion application                                              | `~/.harvest-time/companion/`               |
+| Daily activity, review state, and validated Harvest read snapshots | `~/.harvest-time/companion/apps/api/data/` |
+| OAuth token store                                                  | `~/.harvest-time/companion/.harvest-time/` |
+| Optional environment settings                                      | `~/.harvest-time/companion/.env`           |
 
 All sensitive and mutable files are excluded from Git.
 
 ## Troubleshooting
 
-### The extension says the server is unreachable
+### The extension says the companion is not running
 
 ```sh
 npm run health --prefix "$HOME/.harvest-time/companion"
@@ -319,8 +340,9 @@ Confirm another process is not using port `8787` and that the service remains bo
 
 Bring the side panel into focus or wait for its refresh cycle. The companion fetches an
 authoritative snapshot of today’s Harvest entries and reconciles remote edits, restarts, and
-deletions. If Harvest is temporarily unavailable, the last usable local state is intentionally
-preserved.
+deletions. If Harvest is temporarily unavailable for a transient reason, the exact account/query
+read may use its last validated local snapshot. Authentication failures and all writes still fail
+normally instead of being hidden by cached data.
 
 ### An update is refused
 

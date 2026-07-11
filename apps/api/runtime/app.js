@@ -16,6 +16,7 @@ import { CockpitService } from "./services/cockpit-service.js";
 import { ContextDetector } from "./services/context-detector.js";
 import { GatedJiraIssueResolver } from "./services/jira-issue-resolver.js";
 import { DailyStore } from "./storage/daily-store.js";
+import { HarvestReadCache } from "./storage/harvest-read-cache.js";
 const LOCAL_CORS_ORIGINS = ["http://localhost:8787", "http://127.0.0.1:8787"];
 const CHROME_EXTENSION_ORIGIN = /^chrome-extension:\/\/[a-p]{32}$/;
 export async function buildApp(options = {}) {
@@ -34,17 +35,26 @@ export async function buildApp(options = {}) {
             level: config.LOG_LEVEL
         }
     });
+    const harvestReadCache = backendConfigService
+        ? new HarvestReadCache({ dataDir: backendConfigService.dataDir, now })
+        : undefined;
     const harvestAuthService = new HarvestAuthService({
         backendConfigService,
         config,
-        fetchImpl: options.harvestAuthFetchImpl
+        fetchImpl: options.harvestAuthFetchImpl,
+        onDisconnect: harvestReadCache ? () => harvestReadCache.clear() : undefined
     });
     const harvestClient = options.harvestClient ??
         new HarvestClient({
+            accountId: config.HARVEST_ACCOUNT_ID,
+            accountIdProvider: backendConfigService
+                ? async () => (await backendConfigService.loadConfig()).harvest.accountId
+                : undefined,
             apiBaseUrl: config.HARVEST_API_BASE_URL,
             authBaseUrl: config.HARVEST_AUTH_BASE_URL,
             authService: harvestAuthService,
             fetchImpl: options.harvestFetchImpl,
+            readCache: harvestReadCache,
             userAgent: config.HARVEST_USER_AGENT
         });
     const jiraIssueResolver = options.jiraIssueResolver ?? new GatedJiraIssueResolver(config);

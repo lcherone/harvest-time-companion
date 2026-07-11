@@ -191,6 +191,22 @@ export class BackendConfigService {
         await this.writeValidatedFile(this.authLocalPath, auth, "SETUP_STORAGE_UNAVAILABLE", true);
         return auth;
     }
+    async disconnectHarvest() {
+        const auth = BackendAuthLocalFileSchema.parse({
+            schemaVersion: BACKEND_AUTH_LOCAL_SCHEMA_VERSION,
+            harvest: {}
+        });
+        const config = await this.loadConfig();
+        const updatedConfig = BackendConfigFileSchema.parse({
+            ...config,
+            harvest: {
+                ...config.harvest,
+                accountId: undefined
+            }
+        });
+        await this.writeValidatedFile(this.authLocalPath, auth, "SETUP_STORAGE_UNAVAILABLE", true);
+        await this.writeValidatedFile(this.configPath, updatedConfig, "SETUP_STORAGE_UNAVAILABLE");
+    }
     async saveHarvestAccount(input) {
         const parsed = SaveHarvestAccountRequestSchema.parse(input);
         const config = await this.loadConfig();

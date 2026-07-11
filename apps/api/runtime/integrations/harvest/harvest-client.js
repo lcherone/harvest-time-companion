@@ -72,16 +72,22 @@ export class HarvestApiError extends Error {
     }
 }
 export class HarvestClient {
+    accountId;
+    accountIdProvider;
     apiBaseUrl;
     authBaseUrl;
     authService;
     fetchImpl;
+    readCache;
     userAgent;
     constructor(options) {
+        this.accountId = options.accountId?.trim() || undefined;
+        this.accountIdProvider = options.accountIdProvider;
         this.apiBaseUrl = options.apiBaseUrl.replace(/\/$/, "");
         this.authBaseUrl = options.authBaseUrl.replace(/\/$/, "");
         this.authService = options.authService;
         this.fetchImpl = options.fetchImpl ?? fetch;
+        this.readCache = options.readCache;
         this.userAgent = options.userAgent;
     }
     async isConfigured() {
@@ -104,11 +110,23 @@ export class HarvestClient {
         return HarvestUserSchema.parse(payload);
     }
     async listTaskAssignments() {
-        const payload = await this.request("/users/me/project_assignments", {
-            query: {
-                per_page: 2000
+        let payload;
+        try {
+            payload = await this.request("/users/me/project_assignments", {
+                query: {
+                    per_page: 2000
+                }
+            });
+        }
+        catch (error) {
+            const cached = isTransientHarvestReadError(error)
+                ? await this.readCachedTaskAssignments()
+                : null;
+            if (cached) {
+                return cached;
             }
-        });
+            throw error;
+        }
         const projectAssignments = HarvestProjectAssignmentPayloadSchema.parse(payload).project_assignments;
         const taskAssignments = projectAssignments
             .flatMap((projectAssignment) => {
@@ -130,20 +148,72 @@ export class HarvestClient {
             }));
         })
             .sort(compareTaskAssignments);
-        return HarvestTaskAssignmentsResponseSchema.parse({ taskAssignments });
+        const response = HarvestTaskAssignmentsResponseSchema.parse({ taskAssignments });
+        await this.cacheTaskAssignments(response);
+        return response;
     }
     async listTimeEntries(query = {}) {
-        const payload = await this.request("/time_entries", {
-            query: {
-                from: query.from,
-                to: query.to,
-                is_running: query.isRunning,
-                per_page: 2000
+        let payload;
+        try {
+            payload = await this.request("/time_entries", {
+                query: {
+                    from: query.from,
+                    to: query.to,
+                    is_running: query.isRunning,
+                    per_page: 2000
+                }
+            });
+        }
+        catch (error) {
+            const cached = isTransientHarvestReadError(error)
+                ? await this.readCachedTimeEntries(query)
+                : null;
+            if (cached) {
+                return cached;
             }
-        });
-        return TimeEntriesResponseSchema.parse({
+            throw error;
+        }
+        const response = TimeEntriesResponseSchema.parse({
             timeEntries: payload.time_entries ?? []
         });
+        await this.cacheTimeEntries(query, response);
+        return response;
+    }
+    async cacheTaskAssignments(response) {
+        const accountId = await this.getCacheAccountId();
+        if (!accountId || !this.readCache) {
+            return;
+        }
+        await this.readCache.saveTaskAssignments(accountId, response).catch(() => undefined);
+    }
+    async readCachedTaskAssignments() {
+        const accountId = await this.getCacheAccountId();
+        if (!accountId || !this.readCache) {
+            return null;
+        }
+        return this.readCache.getTaskAssignments(accountId).catch(() => null);
+    }
+    async cacheTimeEntries(query, response) {
+        const accountId = await this.getCacheAccountId();
+        if (!accountId || !this.readCache) {
+            return;
+        }
+        await this.readCache.saveTimeEntries(accountId, query, response).catch(() => undefined);
+    }
+    async readCachedTimeEntries(query) {
+        const accountId = await this.getCacheAccountId();
+        if (!accountId || !this.readCache) {
+            return null;
+        }
+        return this.readCache.getTimeEntries(accountId, query).catch(() => null);
+    }
+    async getCacheAccountId() {
+        try {
+            return (await this.accountIdProvider?.())?.trim() || this.accountId;
+        }
+        catch {
+            return this.accountId;
+        }
     }
     async createTimeEntry(input) {
         const parsed = CreateTimeEntryRequestSchema.parse(input);
@@ -281,6 +351,14 @@ function getHarvestErrorMessage(payload) {
     }
     const message = payload.message;
     return typeof message === "string" ? message : undefined;
+}
+function isTransientHarvestReadError(error) {
+    if (error instanceof HarvestApiError) {
+        return error.statusCode === 408 || error.statusCode === 429 || error.statusCode >= 500;
+    }
+    return (error instanceof TypeError ||
+        (error instanceof DOMException &&
+            (error.name === "AbortError" || error.name === "TimeoutError")));
 }
 function compareTaskAssignments(left, right) {
     return ((left.clientName ?? "").localeCompare(right.clientName ?? "") ||

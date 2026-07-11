@@ -341,8 +341,13 @@ export const HarvestTaskAssignmentSummarySchema = z.object({
     clientName: trimmedNonEmptyStringSchema.optional(),
     projectCode: trimmedNonEmptyStringSchema.optional()
 });
+export const HarvestCacheMetadataSchema = z.object({
+    source: z.literal("cache"),
+    cachedAt: z.string().datetime()
+});
 export const HarvestTaskAssignmentsResponseSchema = z.object({
-    taskAssignments: z.array(HarvestTaskAssignmentSummarySchema)
+    taskAssignments: z.array(HarvestTaskAssignmentSummarySchema),
+    cache: HarvestCacheMetadataSchema.optional()
 });
 export const HarvestTaskMappingSchema = z.object({
     projectId: positiveIntegerIdSchema,
@@ -502,7 +507,8 @@ export const HarvestTimeEntrySchema = z
 })
     .passthrough();
 export const TimeEntriesResponseSchema = z.object({
-    timeEntries: z.array(HarvestTimeEntrySchema)
+    timeEntries: z.array(HarvestTimeEntrySchema),
+    cache: HarvestCacheMetadataSchema.optional()
 });
 export const ListTimeEntriesQuerySchema = z.object({
     from: isoDateSchema.optional(),

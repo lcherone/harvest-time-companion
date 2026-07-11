@@ -1,6 +1,6 @@
 # HarvestTime Privacy Policy
 
-Last updated: 10 July 2026
+Last updated: 11 July 2026
 
 HarvestTime is a browser extension and local companion service that helps users reconstruct,
 review, and submit work time entries. This policy describes the information handled by HarvestTime.
@@ -31,8 +31,9 @@ or unrelated analytics.
 ## Storage and Retention
 
 Activity, configuration, OAuth tokens, and optional credentials are stored locally. Users control
-retention and can delete local state by removing `apps/api/data/` and `.harvest-time/` from the
-companion installation.
+retention and can delete the installed companion directory (normally
+`~/.harvest-time/companion/` on macOS/Linux or `%USERPROFILE%\.harvest-time\companion\` on Windows)
+when complete deletion is wanted.
 
 ## Limited Use
 
