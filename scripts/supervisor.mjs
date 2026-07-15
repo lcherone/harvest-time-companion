@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { clearInterval, setInterval } from "node:timers";
 import { fileURLToPath } from "node:url";
@@ -13,6 +14,8 @@ const updateInterval = Number(process.env.HARVEST_TIME_UPDATE_INTERVAL_MS ?? 21_
 let server;
 let stopping = false;
 let restarting = false;
+let updateCheckQueued = false;
+let lifecycleQueue = Promise.resolve();
 
 if (help) {
   console.log(`Usage: node scripts/supervisor.mjs [--no-update]
@@ -38,27 +41,39 @@ if (updatesEnabled) {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-async function checkForUpdate() {
-  try {
-    const result = await updateCompanion({ checkOnly: true });
-
-    if (!result.changed || stopping) {
-      return;
-    }
-
-    restarting = true;
-    await stopServer();
-    await installUpdate();
-    restarting = false;
-    startServer();
-  } catch (error) {
-    restarting = false;
-    console.error(`HarvestTime automatic update failed: ${error.message}`);
-
-    if (!server && !stopping) {
-      startServer();
-    }
+function checkForUpdate() {
+  if (updateCheckQueued || stopping) {
+    return;
   }
+
+  updateCheckQueued = true;
+  void queueLifecycle(async () => {
+    try {
+      const result = await updateCompanion({ checkOnly: true });
+
+      if (!result.changed || stopping) {
+        return;
+      }
+
+      restarting = true;
+      await stopServer();
+      await installUpdate();
+      restarting = false;
+
+      if (!stopping && !server) {
+        startServer();
+      }
+    } catch (error) {
+      restarting = false;
+      console.error(`HarvestTime automatic update failed: ${error.message}`);
+
+      if (!server && !stopping) {
+        startServer();
+      }
+    } finally {
+      updateCheckQueued = false;
+    }
+  });
 }
 
 async function installUpdate() {
@@ -70,20 +85,39 @@ async function installUpdate() {
 }
 
 function startServer() {
-  server = spawn(process.execPath, ["apps/api/runtime/server.js"], {
-    cwd: companionRoot,
-    env: { ...process.env, NODE_ENV: process.env.NODE_ENV ?? "production" },
-    stdio: "inherit"
-  });
+  if (server || stopping) {
+    return;
+  }
 
-  server.on("error", (error) => {
+  const child = spawn(process.execPath, ["apps/api/runtime/server.js"], {
+    cwd: companionRoot,
+    env: {
+      ...process.env,
+      HARVEST_TIME_COMPANION_VERSION: readCompanionVersion(),
+      HARVEST_TIME_SUPERVISED: "1",
+      NODE_ENV: process.env.NODE_ENV ?? "production"
+    },
+    stdio: ["inherit", "inherit", "inherit", "ipc"]
+  });
+  server = child;
+
+  child.on("error", (error) => {
     console.error(`HarvestTime API could not start: ${error.message}`);
   });
-  server.on("exit", (code, signal) => {
+  child.on("message", (message) => {
+    if (message?.type === "restart-companion") {
+      void queueLifecycle(restartServerFromManager);
+    }
+  });
+  child.on("exit", (code, signal) => {
+    if (server !== child) {
+      return;
+    }
+
     server = undefined;
 
     if (stopping) {
-      process.exit(code ?? 0);
+      return;
     }
 
     if (restarting) {
@@ -92,11 +126,48 @@ function startServer() {
 
     console.error(`HarvestTime API exited (${signal ?? `code ${code}`}); restarting in 5 seconds.`);
     setTimeout(() => {
-      if (!stopping) {
-        startServer();
-      }
+      void queueLifecycle(async () => {
+        if (!stopping && !server) {
+          startServer();
+        }
+      });
     }, 5_000);
   });
+}
+
+function readCompanionVersion() {
+  try {
+    const packageJson = JSON.parse(readFileSync(path.join(companionRoot, "package.json"), "utf8"));
+    return typeof packageJson.version === "string" ? packageJson.version : "0.1.0";
+  } catch {
+    return process.env.npm_package_version ?? "0.1.0";
+  }
+}
+
+async function restartServerFromManager() {
+  if (stopping) {
+    return;
+  }
+
+  restarting = true;
+  console.log("HarvestTime companion restart requested from the local manager.");
+  try {
+    await stopServer();
+  } finally {
+    restarting = false;
+  }
+
+  if (!stopping && !server) {
+    startServer();
+  }
+}
+
+function queueLifecycle(operation) {
+  const run = lifecycleQueue.then(operation, operation);
+  lifecycleQueue = run.catch((error) => {
+    console.error(`HarvestTime companion lifecycle operation failed: ${error.message}`);
+  });
+  return lifecycleQueue;
 }
 
 async function stopServer() {
@@ -126,6 +197,6 @@ async function shutdown(signal) {
   if (timer) {
     clearInterval(timer);
   }
-  await stopServer();
+  await queueLifecycle(stopServer);
   process.exit(signal === "SIGINT" ? 130 : 0);
 }

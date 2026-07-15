@@ -17,6 +17,7 @@ export const apiRoutes = {
             manualEntryOptions: "/api/review/manual-entry-options",
             manualEntries: "/api/review/manual-entries",
             manualEntry: (id = ":id") => `/api/review/manual-entries/${id}`,
+            historyItem: "/api/review/history-items",
             dismissSuggestion: (id = ":id") => `/api/review/suggestions/${id}`
         },
         timer: {
@@ -50,6 +51,17 @@ export const apiRoutes = {
     },
     config: {
         matching: "/api/config/matching"
+    },
+    admin: {
+        launch: "/api/admin/sessions",
+        exchange: "/api/admin/session/exchange",
+        status: "/api/admin/status",
+        history: "/api/admin/history",
+        restart: "/api/admin/restart",
+        harvestToken: "/api/admin/harvest-token",
+        harvestAccount: "/api/admin/harvest-account",
+        harvestDisconnect: "/api/admin/harvest-disconnect",
+        matching: "/api/admin/matching"
     }
 };
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected date as YYYY-MM-DD");
@@ -72,7 +84,7 @@ const queryBooleanSchema = z
 export const HealthResponseSchema = z.object({
     status: z.literal("ok"),
     service: z.literal("harvest-time-api"),
-    version: z.string(),
+    version: z.string().trim().min(1),
     harvestConfigured: z.boolean(),
     uptimeSeconds: z.number()
 });
@@ -83,11 +95,23 @@ export const ApiErrorSchema = z.object({
         details: z.unknown().optional()
     })
 });
+export const AdminLaunchResponseSchema = z.object({
+    url: z.string().url(),
+    expiresAt: isoDateTimeSchema
+});
+export const AdminSessionExchangeRequestSchema = z.object({
+    token: z.string().trim().min(32)
+});
+export const AdminSessionExchangeResponseSchema = z.object({
+    csrfToken: z.string().min(32),
+    expiresAt: isoDateTimeSchema
+});
 export const HarvestAuthSourceSchema = z.enum(["none", "personal-access-token", "oauth"]);
 export const HarvestAuthStatusResponseSchema = z.object({
     ready: z.boolean(),
     source: HarvestAuthSourceSchema,
     oauthClientConfigured: z.boolean(),
+    disconnectAllowed: z.boolean(),
     accountId: z.string().nullable(),
     connectUrl: z.string()
 });
@@ -154,6 +178,41 @@ export const TrackableContextKindSchema = z.enum([
     "github-issue",
     "generic-ticket"
 ]);
+export const AdminHistoryEntrySourceSchema = z.enum(["harvest", "mock", "manual"]);
+export const AdminHistoryEntrySchema = z.object({
+    source: AdminHistoryEntrySourceSchema,
+    description: z.string().min(1),
+    startedAt: isoDateTimeSchema,
+    stoppedAt: isoDateTimeSchema.nullable(),
+    durationMinutes: z.number().int().nonnegative().nullable(),
+    ticketKey: z.string().min(1).nullable(),
+    mappingName: z.string().min(1).nullable(),
+    kind: TrackableContextKindSchema.nullable()
+});
+export const AdminHistoryDaySchema = z.object({
+    date: isoDateSchema,
+    updatedAt: isoDateTimeSchema,
+    eventCount: z.number().int().nonnegative(),
+    contextCount: z.number().int().nonnegative(),
+    historyItemCount: z.number().int().nonnegative(),
+    entryCount: z.number().int().nonnegative(),
+    harvestEntryCount: z.number().int().nonnegative(),
+    manualEntryCount: z.number().int().nonnegative(),
+    trackedMinutes: z.number().int().nonnegative(),
+    entries: z.array(AdminHistoryEntrySchema)
+});
+export const AdminHistoryResponseSchema = z.object({
+    days: z.array(AdminHistoryDaySchema)
+});
+export const ClearAdminHistoryRequestSchema = z.object({}).strict();
+export const ClearAdminHistoryResponseSchema = z.object({
+    removedDayCount: z.number().int().nonnegative(),
+    preservedCurrentDate: isoDateSchema
+});
+export const RestartAdminCompanionRequestSchema = z.object({}).strict();
+export const RestartAdminCompanionResponseSchema = z.object({
+    restartScheduled: z.literal(true)
+});
 export const JiraAuthSourceSchema = z.enum(["none", "basic", "oauth"]);
 export const JiraVerificationStatusSchema = z.object({
     enabled: z.boolean(),
@@ -372,7 +431,8 @@ export const UpdateTimelineEventRequestSchema = z.object({
     summary: trimmedNonEmptyStringSchema.max(1000),
     mapping: HarvestTaskMappingSchema.optional(),
     startedTime: clockTimeSchema.optional(),
-    endedTime: clockTimeSchema.optional()
+    endedTime: clockTimeSchema.optional(),
+    ticketKey: trimmedNonEmptyStringSchema.max(64).nullable().optional()
 });
 export const ProjectKeySchema = z
     .string()
@@ -417,7 +477,8 @@ export const DailyReviewEntrySchema = z.object({
     entryId: z.string().min(1).optional(),
     harvestEntryId: z.number().int().positive().optional(),
     timelineEventId: z.string().min(1).optional(),
-    externalReference: HarvestExternalReferenceSchema.optional()
+    externalReference: HarvestExternalReferenceSchema.optional(),
+    overlapEntryIds: z.array(z.string().min(1)).default([])
 });
 export const ManualDailyEntryOptionsResponseSchema = z.object({
     sources: z.array(ManualDailyEntrySourceSchema),
@@ -458,7 +519,8 @@ export const DailyReviewEntryIdParamsSchema = z.object({
 export const StartTimerRequestSchema = z
     .object({
     contextId: trimmedNonEmptyStringSchema.optional(),
-    mapping: HarvestTaskMappingSchema.optional()
+    mapping: HarvestTaskMappingSchema.optional(),
+    notes: z.string().trim().min(1).max(10000).optional()
 })
     .default({});
 export const CockpitStateSchema = z.object({
@@ -521,9 +583,10 @@ export const CreateTimeEntryRequestSchema = z
     taskId: z.number().int().positive(),
     spentDate: isoDateSchema,
     hours: z.number().min(0).optional(),
-    startedTime: z.string().min(1).optional(),
-    endedTime: z.string().min(1).optional(),
+    startedTime: clockTimeSchema.optional(),
+    endedTime: clockTimeSchema.optional(),
     notes: z.string().max(10000).optional(),
+    ticketKey: trimmedNonEmptyStringSchema.max(64).optional(),
     externalReference: HarvestExternalReferenceSchema.optional()
 })
     .superRefine((value, context) => {
@@ -534,6 +597,13 @@ export const CreateTimeEntryRequestSchema = z
             code: z.ZodIssueCode.custom,
             message: "Use either duration hours or start/end times, not both",
             path: ["hours"]
+        });
+    }
+    if (value.endedTime !== undefined && value.startedTime === undefined) {
+        context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "An end time requires a start time",
+            path: ["endedTime"]
         });
     }
 });

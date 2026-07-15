@@ -231,6 +231,18 @@ export class BackendConfigService {
         await this.writeValidatedFile(this.configPath, updatedConfig, "SETUP_STORAGE_UNAVAILABLE");
         return updatedConfig;
     }
+    async saveExtensionOrigin(extensionOrigin) {
+        const config = await this.loadConfig();
+        const updatedConfig = BackendConfigFileSchema.parse({
+            ...config,
+            server: {
+                ...config.server,
+                extensionOrigin
+            }
+        });
+        await this.writeValidatedFile(this.configPath, updatedConfig, "SETUP_STORAGE_UNAVAILABLE");
+        return updatedConfig;
+    }
     async readOrCreate(input) {
         try {
             const existingValue = await readJsonFile(input.filePath, input.schema, {

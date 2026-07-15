@@ -10,6 +10,11 @@ export function getDotenvPaths(options = {}) {
     const moduleUrl = options.moduleUrl ?? import.meta.url;
     const moduleDirectory = dirname(fileURLToPath(moduleUrl));
     const paths = [];
+    const explicitPath = options.dotenvPath ?? process.env.HARVEST_TIME_ENV_FILE;
+    if (explicitPath) {
+        addUniquePath(paths, resolve(cwd, explicitPath));
+        return paths;
+    }
     addUniquePath(paths, resolve(cwd, ".env"));
     if (initCwd) {
         addUniquePath(paths, resolve(initCwd, ".env"));

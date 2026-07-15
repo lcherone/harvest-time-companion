@@ -1,6 +1,6 @@
 {
   "name": "harvest-time-companion",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "engines": {
@@ -16,6 +16,7 @@
     "service:install": "node scripts/install-service.mjs",
     "service:uninstall": "node scripts/install-service.mjs --uninstall",
     "smoke": "node scripts/smoke-test.mjs",
+    "smoke:supervisor": "node scripts/supervisor-smoke-test.mjs",
     "start": "npm run start -w @harvest-time/api",
     "start:auto": "node scripts/supervisor.mjs",
     "update": "node scripts/update.mjs",

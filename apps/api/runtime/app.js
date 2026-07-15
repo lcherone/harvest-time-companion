@@ -7,6 +7,7 @@ import { HttpError } from "./http/errors.js";
 import { HarvestAuthService } from "./integrations/harvest/harvest-auth-service.js";
 import { HarvestApiError, HarvestClient } from "./integrations/harvest/harvest-client.js";
 import { cockpitRoutes } from "./routes/cockpit-routes.js";
+import { adminRoutes } from "./routes/admin-routes.js";
 import { harvestAuthRoutes } from "./routes/harvest-auth-routes.js";
 import { harvestRoutes } from "./routes/harvest-routes.js";
 import { healthRoutes } from "./routes/health-routes.js";
@@ -15,6 +16,10 @@ import { setupRoutes } from "./routes/setup-routes.js";
 import { CockpitService } from "./services/cockpit-service.js";
 import { ContextDetector } from "./services/context-detector.js";
 import { GatedJiraIssueResolver } from "./services/jira-issue-resolver.js";
+import { HarvestReferencePolicy } from "./services/harvest-reference-policy.js";
+import { AdminSessionService } from "./services/admin-session-service.js";
+import { resolveCompanionVersion } from "./services/companion-version.js";
+import { DailyHistoryStore } from "./storage/daily-history-store.js";
 import { DailyStore } from "./storage/daily-store.js";
 import { HarvestReadCache } from "./storage/harvest-read-cache.js";
 const LOCAL_CORS_ORIGINS = ["http://localhost:8787", "http://127.0.0.1:8787"];
@@ -30,6 +35,11 @@ export async function buildApp(options = {}) {
     const config = backendConfigService
         ? await backendConfigService.loadRuntimeAppConfig()
         : envConfig;
+    const companionVersion = options.companionVersion ??
+        (await resolveCompanionVersion({
+            nodeEnv: config.NODE_ENV,
+            packageUrl: new URL("../../../package.json", import.meta.url)
+        }));
     const app = Fastify({
         logger: options.logger ?? {
             level: config.LOG_LEVEL
@@ -58,6 +68,10 @@ export async function buildApp(options = {}) {
             userAgent: config.HARVEST_USER_AGENT
         });
     const jiraIssueResolver = options.jiraIssueResolver ?? new GatedJiraIssueResolver(config);
+    const harvestReferencePolicy = new HarvestReferencePolicy({
+        jiraSiteUrl: config.JIRA_SITE_URL,
+        ticketKeyRegex: config.JIRA_KEY_REGEX
+    });
     const cockpitService = options.cockpitService ??
         new CockpitService({
             backendConfigService,
@@ -73,6 +87,7 @@ export async function buildApp(options = {}) {
             harvestClient,
             harvestAuthService,
             jiraIssueResolver,
+            harvestReferencePolicy,
             now,
             store: persistedConfig
                 ? new DailyStore({
@@ -84,7 +99,7 @@ export async function buildApp(options = {}) {
         });
     await cockpitService.reconcileState();
     await app.register(cors, {
-        methods: ["GET", "POST", "PATCH", "OPTIONS"],
+        methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         origin: getAllowedCorsOrigins(config)
     });
     app.setErrorHandler((error, request, reply) => {
@@ -100,12 +115,29 @@ export async function buildApp(options = {}) {
         }
         return reply.status(response.statusCode).send(response.body);
     });
-    await app.register(healthRoutes, { harvestAuthService });
+    await app.register(healthRoutes, { harvestAuthService, version: companionVersion });
+    if (backendConfigService) {
+        await app.register(adminRoutes, {
+            adminSessionService: options.adminSessionService ?? new AdminSessionService(),
+            backendConfigService,
+            config,
+            historyStore: new DailyHistoryStore({
+                dataDir: backendConfigService.dataDir,
+                now,
+                timezone: persistedConfig?.harvest.timezone
+            }),
+            harvestAuthService,
+            harvestClient,
+            jiraIssueResolver,
+            requestRestart: options.requestRestart,
+            version: companionVersion
+        });
+    }
     await app.register(harvestAuthRoutes, { harvestAuthService });
     await app.register(jiraRoutes, { jiraIssueResolver });
     await app.register(cockpitRoutes, { cockpitService });
     await app.register(setupRoutes, { backendConfigService, harvestAuthService, harvestClient });
-    await app.register(harvestRoutes, { harvestClient });
+    await app.register(harvestRoutes, { harvestClient, harvestReferencePolicy });
     return app;
 }
 function getAllowedCorsOrigins(config) {

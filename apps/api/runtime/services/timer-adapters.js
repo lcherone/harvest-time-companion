@@ -229,7 +229,9 @@ export function buildHarvestCreateTimeEntryRequest(input) {
         spentDate: input.spentDate ?? toLocalIsoDate(new Date(input.timestamp)),
         notes: input.notes ?? buildHarvestNotes(input)
     };
-    const externalReference = input.externalReference ?? buildHarvestExternalReference(input.context);
+    const externalReference = "externalReference" in input
+        ? input.externalReference
+        : buildHarvestExternalReference(input.context);
     if (externalReference) {
         request.externalReference = externalReference;
     }
@@ -240,7 +242,7 @@ export function formatWorkTimerDescription(context, fallback = "Work") {
         return normalizeDescription(fallback, "Work");
     }
     const title = normalizeTicketTitle(context.title, context.key);
-    return `${context.key}: ${title}`;
+    return isJiraTicketKey(context.key) ? `${context.key}: ${title}` : title;
 }
 function requireHarvestMapping(mapping) {
     if (isCompleteHarvestMapping(mapping)) {
@@ -295,48 +297,37 @@ function buildHarvestNotes(input) {
     return formatWorkTimerDescription(context, input.description);
 }
 function buildHarvestExternalReference(context) {
-    if (!context?.permalink || (context.source !== "jira" && context.source !== "github")) {
+    if (!context?.permalink ||
+        context.source !== "jira" ||
+        context.jira?.verified === false ||
+        !isJiraBrowseUrl(context.permalink, context.key)) {
         return undefined;
     }
-    const reference = {
+    return {
         id: context.key,
         permalink: context.permalink,
-        service: context.source
+        service: "jira"
     };
-    const githubMetadata = getGitHubContextMetadata(context);
-    if (githubMetadata) {
-        reference.group_id = githubMetadata.repository;
-    }
-    return reference;
 }
-function getGitHubContextMetadata(context) {
-    if (context.source !== "github") {
-        return null;
-    }
-    const idMatch = /^github:([^:]+):(pull|issues):(\d+)$/.exec(context.id);
-    const permalinkMatch = /^\/([^/]+\/[^/]+)\/(pull|issues)\/(\d+)$/.exec(getUrlPathname(context.permalink ?? context.url));
-    const repository = idMatch?.[1] ?? permalinkMatch?.[1];
-    const section = idMatch?.[2] ?? permalinkMatch?.[2];
-    const number = idMatch?.[3] ?? permalinkMatch?.[3];
-    if (!repository || !section || !number) {
-        return null;
-    }
-    return {
-        repository,
-        type: section === "pull" ? "Pull Request" : "Issue",
-        number
-    };
+function isJiraBrowseUrl(value, key) {
+    return getUrlPathname(value).toUpperCase() === `/BROWSE/${key.toUpperCase()}`;
 }
 function normalizeTicketTitle(rawTitle, key) {
     const escapedKey = escapeRegExp(key);
     let title = normalizeWhitespace(rawTitle) ?? key;
     title = title
+        .replace(/\s+by\s+.+?\s+·\s+Pull Request\s+#\d+\s+·\s+.+$/i, "")
+        .replace(/\s+·\s+Pull Request\s+#\d+\s+·\s+.+$/i, "")
+        .replace(/\s+·\s+Issue\s+#\d+\s+·\s+.+$/i, "")
         .replace(/\s*(?:[-–—|·]\s*)JIRA\s*$/i, "")
         .replace(/\s*(?:[-–—|·]\s*)Atlassian\s*$/i, "")
         .replace(new RegExp(`^\\[${escapedKey}\\]\\s*`, "i"), "")
         .replace(new RegExp(`^${escapedKey}\\s*(?::|[-–—|])?\\s*`, "i"), "")
         .replace(new RegExp(`\\[${escapedKey}\\]\\s*`, "gi"), "");
     return normalizeWhitespace(title) ?? key;
+}
+function isJiraTicketKey(value) {
+    return /^[A-Z][A-Z0-9]+-\d+$/i.test(value);
 }
 function normalizeWhitespace(value) {
     const normalized = value?.replace(/\s+/g, " ").trim();

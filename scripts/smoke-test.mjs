@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,9 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "harvest-time-companion-"));
 const port = await findAvailablePort();
+const expectedVersion = JSON.parse(
+  await readFile(path.join(repoRoot, "package.json"), "utf8")
+).version;
 let output = "";
 
 const server = spawn(process.execPath, ["apps/api/runtime/server.js"], {
@@ -36,7 +39,11 @@ server.stderr.on("data", (chunk) => {
 try {
   const health = await waitForHealth(port);
 
-  if (health?.status !== "ok" || health?.service !== "harvest-time-api") {
+  if (
+    health?.status !== "ok" ||
+    health?.service !== "harvest-time-api" ||
+    health?.version !== expectedVersion
+  ) {
     throw new Error(`Unexpected health response: ${JSON.stringify(health)}`);
   }
 

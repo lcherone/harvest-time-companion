@@ -7,6 +7,7 @@ import { HarvestApiError } from "../integrations/harvest/harvest-client.js";
 import { DailyStore, DailyStoreFileSchema, upsertDailyContextEvidence } from "../storage/daily-store.js";
 import { ContextDetector } from "./context-detector.js";
 import { formatWorkTimerDescription, HarvestTimerAdapter, isCompleteHarvestMapping, isTimerAdapterHarvestClient, MockTimerAdapter } from "./timer-adapters.js";
+import { HarvestReferencePolicy } from "./harvest-reference-policy.js";
 import { ZodError } from "zod";
 const RECENT_CONTEXT_LIMIT = 5;
 const MILLISECONDS_PER_HOUR = 60 * 60 * 1000;
@@ -20,6 +21,7 @@ export class CockpitService {
     config;
     detector;
     harvestClient;
+    harvestReferencePolicy;
     harvestAuthService;
     harvestTimerAdapter;
     jiraIssueResolver;
@@ -30,6 +32,12 @@ export class CockpitService {
         this.backendConfigService = options.backendConfigService;
         this.config = options.config;
         this.harvestClient = options.harvestClient;
+        this.harvestReferencePolicy =
+            options.harvestReferencePolicy ??
+                new HarvestReferencePolicy({
+                    jiraSiteUrl: options.config.JIRA_SITE_URL,
+                    ticketKeyRegex: options.config.JIRA_KEY_REGEX
+                });
         this.harvestAuthService = options.harvestAuthService;
         this.jiraIssueResolver = options.jiraIssueResolver;
         this.mockTimerAdapter = new MockTimerAdapter();
@@ -80,6 +88,10 @@ export class CockpitService {
     async recordClipboardTicket(payload) {
         const store = await this.store.load();
         const context = await this.enrichDetectedContext(this.detector.detectClipboardTicket(payload));
+        if (context.trackable && context.jira?.verificationStatus === "failed") {
+            store.state.lastError = null;
+            return this.saveAndReturnState(store);
+        }
         const contextEvidence = upsertDailyContextEvidence(store.contexts, context);
         const shouldAppendTimelineEvent = shouldAppendContextTimelineEvent(store, contextEvidence);
         store.state.lastDetectedContext = context;
@@ -98,10 +110,24 @@ export class CockpitService {
     async recordBrowserHistory(items) {
         const store = await this.store.load();
         const uniqueItems = new Map();
+        const dismissedHistoryItemKeys = new Set(store.dismissedHistoryItemKeys);
         for (const item of items) {
-            uniqueItems.set(getHistoryItemKey(item), item);
+            const key = getHistoryItemKey(item);
+            if (!dismissedHistoryItemKeys.has(key)) {
+                uniqueItems.set(key, item);
+            }
         }
         store.historyItems = [...uniqueItems.values()].sort((firstItem, secondItem) => firstItem.lastVisitTime - secondItem.lastVisitTime);
+        return this.saveAndReturnState(store);
+    }
+    async dismissBrowserHistoryItem(item) {
+        const store = await this.store.load();
+        const key = getHistoryItemKey(item);
+        if (!store.dismissedHistoryItemKeys.includes(key)) {
+            store.dismissedHistoryItemKeys.push(key);
+        }
+        store.historyItems = (store.historyItems ?? []).filter((historyItem) => getHistoryItemKey(historyItem) !== key);
+        store.state.lastError = null;
         return this.saveAndReturnState(store);
     }
     async getManualDailyEntryOptions() {
@@ -241,12 +267,21 @@ export class CockpitService {
             }
             this.removeResumeItemsForContext(store, context.id);
             const timerAdapter = await this.selectTimerAdapter(mappingResolution);
-            const description = formatWorkTimerDescription(context);
+            const generatedDescription = formatWorkTimerDescription(context);
+            const description = input.notes?.trim() || generatedDescription;
+            const descriptionTicketKey = this.harvestReferencePolicy.getTicketKey(description);
+            const contextTicketKey = this.harvestReferencePolicy.getTicketKey(context.key);
+            const externalReference = this.harvestReferencePolicy.fromText(description) ??
+                (descriptionTicketKey && descriptionTicketKey === contextTicketKey
+                    ? this.harvestReferencePolicy.fromContext(context)
+                    : undefined);
             const timer = await timerAdapter.createRunningEntry(store, {
                 mode: "work",
                 context,
                 description,
+                externalReference,
                 mapping: mappingResolution.mapping,
+                notes: description,
                 timestamp
             });
             store.state.lastError = null;
@@ -390,11 +425,22 @@ export class CockpitService {
         const harvestTarget = linkedEntryId
             ? getLinkedHarvestUpdateTarget(store, linkedEntryId, event)
             : null;
+        const desiredExternalReference = input.ticketKey === null
+            ? undefined
+            : input.ticketKey
+                ? this.harvestReferencePolicy.fromTicketKey(input.ticketKey)
+                : this.harvestReferencePolicy.fromText(summary);
+        const currentExternalReference = linkedEntryId
+            ? getLinkedHarvestExternalReference(store, linkedEntryId)
+            : undefined;
+        const shouldUpdateExternalReference = Boolean(desiredExternalReference) &&
+            !areHarvestExternalReferencesEqual(currentExternalReference, desiredExternalReference);
+        const shouldDeleteExternalReference = Boolean(currentExternalReference) && !desiredExternalReference;
         if (harvestTarget) {
             if (!this.harvestClient) {
                 throw new HttpError(503, "HARVEST_UPDATE_UNAVAILABLE", "Harvest update is unavailable for this timeline entry");
             }
-            if (input.mapping || timingUpdate) {
+            if (input.mapping || timingUpdate || shouldUpdateExternalReference) {
                 if (!this.harvestClient.updateTimeEntry) {
                     throw new HttpError(503, "HARVEST_UPDATE_UNAVAILABLE", "Harvest time entry update is unavailable for this timeline entry");
                 }
@@ -402,16 +448,31 @@ export class CockpitService {
                     endedTime: timingUpdate?.endedTime,
                     mapping: input.mapping,
                     notes: summary,
-                    startedTime: timingUpdate?.startedTime
+                    startedTime: timingUpdate?.startedTime,
+                    externalReference: desiredExternalReference
                 });
             }
             else {
                 await this.harvestClient.updateTimeEntryNotes(harvestTarget.harvestEntryId, summary);
             }
+            if (shouldDeleteExternalReference) {
+                if (!this.harvestClient.deleteTimeEntryExternalReference) {
+                    throw new HttpError(503, "HARVEST_UPDATE_UNAVAILABLE", "Harvest external reference removal is unavailable for this timeline entry");
+                }
+                await this.harvestClient.deleteTimeEntryExternalReference(harvestTarget.harvestEntryId);
+            }
         }
         event.summary = summary;
+        event.details = {
+            ...event.details,
+            ...(desiredExternalReference ? { externalReference: desiredExternalReference } : {})
+        };
+        if (!desiredExternalReference && event.details) {
+            delete event.details.externalReference;
+        }
         if (linkedEntryId) {
             updateLinkedLocalEntryDescriptions(store, linkedEntryId, summary);
+            updateLinkedLocalEntryExternalReference(store, linkedEntryId, desiredExternalReference);
             if (input.mapping) {
                 updateLinkedLocalEntryMapping(store, linkedEntryId, input.mapping);
                 event.details = {
@@ -615,22 +676,7 @@ export class CockpitService {
                 localEntry.updatedAt = timestamp;
             }
             store.state.runningTimer = null;
-            this.recordTimerOperationError(store, {
-                statusCode: 409,
-                error: {
-                    code: "HARVEST_TIMER_RECONCILED",
-                    message: "Local Harvest timer state was stale and has been cleared",
-                    details: {
-                        entryId: currentTimer.entryId,
-                        harvestEntryId: currentTimer.harvestEntryId
-                    }
-                }
-            }, {
-                action: "reconcile",
-                entryId: currentTimer.entryId,
-                timer: currentTimer,
-                dedupe: true
-            });
+            store.state.lastError = null;
             return this.store.save(store);
         }
         catch (error) {
@@ -663,12 +709,58 @@ export class CockpitService {
             return store;
         }
         const remoteEntries = response.timeEntries.filter((entry) => entry.spent_date === store.date && Number.isInteger(entry.id) && entry.id > 0);
+        const reconciledEntries = [];
         let changed = false;
         for (const entry of remoteEntries) {
-            changed = this.upsertImportedHarvestTimeEntry(store, entry) || changed;
+            const reconciledEntry = await this.reconcileHarvestExternalReference(entry);
+            reconciledEntries.push(reconciledEntry);
+            changed = this.upsertImportedHarvestTimeEntry(store, reconciledEntry) || changed;
         }
-        changed = reconcileHarvestSnapshot(store, remoteEntries) || changed;
+        changed = reconcileHarvestSnapshot(store, reconciledEntries) || changed;
         return changed ? this.store.save(store) : store;
+    }
+    async reconcileHarvestExternalReference(entry) {
+        const existing = entry.external_reference ?? undefined;
+        if (!existing) {
+            return entry;
+        }
+        const desired = this.harvestReferencePolicy.fromText(entry.notes ?? "");
+        const noteTicketKey = this.harvestReferencePolicy.getTicketKey(entry.notes ?? "");
+        const canonicalExisting = this.harvestReferencePolicy.sanitize(existing);
+        if (canonicalExisting && !desired && noteTicketKey === canonicalExisting.id.toUpperCase()) {
+            return areHarvestExternalReferencesEqual(existing, canonicalExisting)
+                ? entry
+                : { ...entry, external_reference: canonicalExisting };
+        }
+        if (desired && !areHarvestExternalReferencesEqual(canonicalExisting, desired)) {
+            if (!this.harvestClient?.updateTimeEntry) {
+                return entry;
+            }
+            try {
+                const updated = await this.harvestClient.updateTimeEntry(entry.id, {
+                    externalReference: desired
+                });
+                return isHarvestTimeEntry(updated) ? updated : { ...entry, external_reference: desired };
+            }
+            catch {
+                return entry;
+            }
+        }
+        if (desired && canonicalExisting) {
+            return areHarvestExternalReferencesEqual(existing, canonicalExisting)
+                ? entry
+                : { ...entry, external_reference: canonicalExisting };
+        }
+        if (!this.harvestClient?.deleteTimeEntryExternalReference) {
+            return entry;
+        }
+        try {
+            await this.harvestClient.deleteTimeEntryExternalReference(entry.id);
+            return { ...entry, external_reference: null };
+        }
+        catch {
+            return entry;
+        }
     }
     upsertImportedHarvestTimeEntry(store, entry) {
         if (!Number.isInteger(entry.id) || entry.id <= 0) {
@@ -985,7 +1077,7 @@ export class CockpitService {
             : entry)
             .filter((entry) => !harvestEntries.some((harvestEntry) => areDailyReviewEntriesSameWork(entry, harvestEntry) &&
             doDailyReviewEntriesOverlap(entry, harvestEntry)));
-        return [...harvestEntries, ...manualEntries, ...historyEntries].sort((firstEntry, secondEntry) => Date.parse(firstEntry.startedAt) - Date.parse(secondEntry.startedAt));
+        return addDailyReviewOverlapMetadata([...harvestEntries, ...manualEntries, ...historyEntries].sort((firstEntry, secondEntry) => Date.parse(firstEntry.startedAt) - Date.parse(secondEntry.startedAt)));
     }
     getManualReviewEntries(store) {
         return store.manualEntries.map((entry) => {
@@ -1006,7 +1098,8 @@ export class CockpitService {
                 evidenceCount: entry.evidenceCount,
                 historyItems: [],
                 context: entry.context,
-                externalReference: getDailyReviewExternalReferenceFromContext(entry.context)
+                externalReference: getDailyReviewExternalReferenceFromContext(entry.context),
+                overlapEntryIds: []
             };
         });
     }
@@ -1025,14 +1118,16 @@ export class CockpitService {
             const durationMinutes = stoppedAt
                 ? Math.max(0, Math.round((Date.parse(stoppedAt) - Date.parse(startedAt)) / 60_000))
                 : 0;
-            const key = context?.key ?? `Harvest #${entry.id}`;
+            const key = context?.key ?? "On Harvest";
             const title = normalizeDailyReviewTitle(entry.description, key);
             return {
                 id: `harvest:${entry.id}`,
                 source: "harvest",
                 key,
                 title,
-                notes: formatDailyReviewNotes(key, title),
+                notes: context
+                    ? formatDailyReviewNotes(key, title)
+                    : (normalizeWhitespace(entry.description) ?? title),
                 startedAt,
                 stoppedAt,
                 durationMinutes,
@@ -1045,7 +1140,8 @@ export class CockpitService {
                 harvestEntryId: entry.id,
                 timelineEventId: editableEvent?.id,
                 externalReference: getDailyReviewExternalReferenceFromEvents(events) ??
-                    (context ? getDailyReviewExternalReferenceFromContext(context) : undefined)
+                    (context ? getDailyReviewExternalReferenceFromContext(context) : undefined),
+                overlapEntryIds: []
             };
         });
     }
@@ -1160,7 +1256,27 @@ function doDailyReviewEntriesOverlap(firstEntry, secondEntry) {
         !Number.isFinite(secondEnd)) {
         return false;
     }
-    return Math.max(firstStart, secondStart) <= Math.min(firstEnd, secondEnd);
+    return Math.max(firstStart, secondStart) < Math.min(firstEnd, secondEnd);
+}
+function addDailyReviewOverlapMetadata(entries) {
+    for (const entry of entries) {
+        entry.overlapEntryIds = [];
+    }
+    const timedEntries = entries.filter((entry) => entry.stoppedAt !== null);
+    for (let index = 0; index < timedEntries.length; index += 1) {
+        const entry = timedEntries[index];
+        if (!entry) {
+            continue;
+        }
+        for (const candidate of timedEntries.slice(index + 1)) {
+            if (!doDailyReviewEntriesOverlap(entry, candidate)) {
+                continue;
+            }
+            entry.overlapEntryIds.push(candidate.id);
+            candidate.overlapEntryIds.push(entry.id);
+        }
+    }
+    return entries;
 }
 function getTimesheetUpdateStartMs(harvestEntries) {
     const harvestCoverage = getHarvestReviewCoverage(harvestEntries);
@@ -1258,8 +1374,15 @@ function isHarvestExternalReference(value) {
     const reference = value;
     return typeof reference.id === "string" && reference.id.trim().length > 0;
 }
+function isHarvestTimeEntry(value) {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const entry = value;
+    return typeof entry.id === "number" && typeof entry.spent_date === "string";
+}
 function getDailyReviewExternalReferenceFromContext(context) {
-    if (context.source !== "jira" && context.source !== "github") {
+    if (context.source !== "jira" || context.jira?.verified === false) {
         return undefined;
     }
     const permalink = context.permalink ?? context.url;
@@ -1269,12 +1392,8 @@ function getDailyReviewExternalReferenceFromContext(context) {
     const reference = {
         id: context.key,
         permalink,
-        service: context.source
+        service: "jira"
     };
-    const githubRepository = context.source === "github" ? getGitHubRepositoryFromUrl(permalink) : null;
-    if (githubRepository) {
-        reference.group_id = githubRepository;
-    }
     return reference;
 }
 function createHistoryReviewSegment(context, evidence, options = {}) {
@@ -1334,7 +1453,8 @@ function toDailyReviewEntryFromHistorySegment(segment, closedAtMs) {
             ...segment.context,
             detectedAt: startedAt
         },
-        externalReference: getDailyReviewExternalReferenceFromContext(segment.context)
+        externalReference: getDailyReviewExternalReferenceFromContext(segment.context),
+        overlapEntryIds: []
     };
 }
 function toReviewHistoryItem(evidence, segmentContext) {
@@ -1486,16 +1606,6 @@ function createManualDailyEntryId(key, timestamp, index) {
     const safeTimestamp = timestamp.replace(/[^0-9a-z]+/gi, "-").replace(/^-+|-+$/g, "");
     return `manual-${safeKey}-${safeTimestamp}-${index}`;
 }
-function getGitHubRepositoryFromUrl(value) {
-    try {
-        const url = new URL(value);
-        const [owner, repo] = url.pathname.split("/").filter(Boolean);
-        return owner && repo ? `${owner}/${repo}` : null;
-    }
-    catch {
-        return null;
-    }
-}
 function isHttpUrl(value) {
     try {
         const url = new URL(value);
@@ -1525,7 +1635,9 @@ function toTrackableContextFromEvidence(context) {
         kind: context.kind,
         source: context.source,
         key: context.key,
-        title: context.latestTitle,
+        title: context.kind === "github-pull-request" || context.kind === "github-issue"
+            ? normalizeDailyReviewTitle(context.latestTitle, context.key)
+            : context.latestTitle,
         url: context.latestUrl,
         host: context.host,
         confidence: context.confidence,
@@ -2141,6 +2253,17 @@ function updateLinkedLocalEntryDescriptions(store, entryId, description) {
         }
     }
 }
+function updateLinkedLocalEntryExternalReference(store, entryId, externalReference) {
+    for (const event of store.events.filter((candidate) => isTimelineEventLinkedToEntry(candidate, entryId))) {
+        event.details = {
+            ...event.details,
+            ...(externalReference ? { externalReference } : {})
+        };
+        if (!externalReference) {
+            delete event.details.externalReference;
+        }
+    }
+}
 function updateLinkedLocalEntryMapping(store, entryId, mapping) {
     const mappingName = getMappingDisplayName(mapping);
     for (const entry of store.harvestEntries) {
@@ -2356,6 +2479,15 @@ function getLinkedHarvestUpdateTarget(store, entryId, event) {
         };
     }
     return null;
+}
+function getLinkedHarvestExternalReference(store, entryId) {
+    const events = store.events
+        .filter((event) => isTimelineEventLinkedToEntry(event, entryId))
+        .sort((firstEvent, secondEvent) => Date.parse(firstEvent.occurredAt) - Date.parse(secondEvent.occurredAt));
+    return getDailyReviewExternalReferenceFromEvents(events);
+}
+function areHarvestExternalReferencesEqual(first, second) {
+    return first?.id === second?.id && first?.permalink === second?.permalink;
 }
 function getDetailsHarvestEntryId(details) {
     const value = details?.harvestEntryId;

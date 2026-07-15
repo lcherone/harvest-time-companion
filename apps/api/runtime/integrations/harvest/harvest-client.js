@@ -1,4 +1,4 @@
-import { CreateTimeEntryRequestSchema, HarvestAccountsResponseSchema, HarvestTaskMappingSchema, HarvestTaskAssignmentsResponseSchema, HarvestTimeEntrySchema, HarvestUserSchema, TimeEntriesResponseSchema } from "@harvest-time/shared";
+import { CreateTimeEntryRequestSchema, HarvestAccountsResponseSchema, HarvestTaskMappingSchema, HarvestExternalReferenceSchema, HarvestTaskAssignmentsResponseSchema, HarvestTimeEntrySchema, HarvestUserSchema, TimeEntriesResponseSchema } from "@harvest-time/shared";
 import { z } from "zod";
 import { ServiceUnavailableError } from "../../http/errors.js";
 const HarvestAccountsPayloadSchema = z
@@ -55,6 +55,7 @@ const HarvestProjectAssignmentPayloadSchema = z
     .passthrough();
 const UpdateTimeEntryInputSchema = z.object({
     endedTime: z.string().min(1).optional(),
+    externalReference: HarvestExternalReferenceSchema.optional(),
     mapping: HarvestTaskMappingSchema.optional(),
     notes: z.string().max(10000).optional(),
     startedTime: z.string().min(1).optional()
@@ -247,6 +248,9 @@ export class HarvestClient {
         if (parsed.endedTime !== undefined) {
             body.ended_time = parsed.endedTime;
         }
+        if (parsed.externalReference !== undefined) {
+            body.external_reference = parsed.externalReference;
+        }
         if (parsed.mapping) {
             body.project_id = parsed.mapping.projectId;
             body.task_id = parsed.mapping.taskId;
@@ -256,6 +260,11 @@ export class HarvestClient {
             body
         });
         return HarvestTimeEntrySchema.parse(payload);
+    }
+    async deleteTimeEntryExternalReference(id) {
+        await this.request(`/time_entries/${id}/external_reference`, {
+            method: "DELETE"
+        });
     }
     async stopTimeEntry(id) {
         const payload = await this.request(`/time_entries/${id}/stop`, {

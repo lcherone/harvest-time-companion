@@ -16,13 +16,18 @@ that must remain open.
 
 ## Contents
 
-- [Why the companion runs locally](#why-a-local-nodejs-companion)
-- [Review the architecture and quality model](#lightweight-by-design-thoroughly-tested)
-- [Read the privacy and security promise](#privacy-security-and-a-free-forever-promise)
-- [Install the companion](#one-time-installation)
-- [Connect Harvest and Jira](#connect-a-harvest-account)
-- [Operate and update it](#normal-day-to-day-operation)
-- [Troubleshoot or uninstall](#troubleshooting)
+- **Understand it:** [why it runs locally](#why-a-local-nodejs-companion) ·
+  [quality model](#lightweight-by-design-thoroughly-tested) ·
+  [privacy promise](#privacy-security-and-a-free-forever-promise) ·
+  [extension features](#what-it-unlocks-in-the-extension)
+- **Install it:** [one-time installation](#one-time-installation) ·
+  [inspect first](#prefer-to-inspect-it-first) ·
+  [architecture](#how-the-pieces-communicate) · [first run](#first-run-and-mock-mode)
+- **Configure it:** [Harvest and the manager](#connect-a-harvest-account) ·
+  [optional Jira](#optional-jira-enrichment)
+- **Operate it:** [day-to-day behaviour](#normal-day-to-day-operation) ·
+  [commands](#useful-commands) · [local files](#local-files) ·
+  [troubleshooting](#troubleshooting) · [uninstall](#uninstall-or-remove-automatic-startup)
 
 ## Why a local Node.js companion?
 
@@ -86,6 +91,17 @@ Browser evidence cannot submit time or control a timer by itself. Network-facing
 explicit, the service binds to `127.0.0.1` by default, tokens are kept out of Chrome sync storage,
 and sensitive mutable files are excluded from Git.
 
+### Security boundaries at a glance
+
+| Boundary              | Protection                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Network**           | The API and manager bind to loopback; the port must not be exposed to a LAN or public internet.              |
+| **Credentials**       | Harvest OAuth/PAT and optional Jira values stay in companion-owned storage or `.env`, never Chrome sync.     |
+| **Manager access**    | The extension creates a 60-second, single-use capability that becomes a short-lived local session.           |
+| **Manager mutations** | Session, exact loopback origin, and CSRF checks are required; responses never return stored secrets.         |
+| **Restart**           | The browser can request one fixed supervisor action, never an arbitrary command, path, PID, or service name. |
+| **Updates**           | Only clean, fast-forwardable installations update automatically; local modifications stop the update safely. |
+
 ## What it unlocks in the extension
 
 ### A reconstructed day you can actually review
@@ -123,6 +139,10 @@ It does **not** read page bodies, passwords, cookies, form contents, or payment 
 The companion owns explicit start, switch, stop, and resume transitions. Browser activity can
 suggest context, but it cannot operate a timer by itself.
 
+<p align="center">
+  <img src="screenshots/timer-running.png" width="500" alt="HarvestTime active Harvest timer powered by the local companion" />
+</p>
+
 On each side-panel refresh, today’s Harvest list is treated as authoritative:
 
 - remote note, mapping, and clock-time edits update the local row;
@@ -134,6 +154,20 @@ On each side-panel refresh, today’s Harvest list is treated as authoritative:
 - rejected credentials never fall back to cached data, and mutations always remain live—cached
   data can never claim that a create, update, or timer action succeeded.
 
+### A clean, editable Today story
+
+The Today timeline turns detailed timer and context events into a compact human-facing narrative.
+It can collapse on long days, groups low-level evidence, and gives eligible timer events focused
+edit, resume, and remove actions.
+
+<p align="center">
+  <img src="screenshots/today-timeline.png" width="500" alt="HarvestTime Today timeline with an editable timer event" />
+</p>
+
+Timeline changes pass through shared validation and the companion's daily store. Harvest-backed
+events update their real time entry; browser evidence remains local until the user approves an
+entry action.
+
 ### Optional Jira detail
 
 Basic Jira-key and GitHub context detection is local. Optional Jira verification adds the canonical
@@ -142,9 +176,16 @@ entries, local detection, timer operations, and Harvest submission continue to w
 
 ### Plain-language privacy and recovery
 
-<p align="center">
-  <img src="screenshots/settings-privacy.png" width="500" alt="HarvestTime privacy and security settings" />
-</p>
+<table>
+  <tr>
+    <td align="center"><img src="screenshots/settings-privacy.png" width="390" alt="HarvestTime privacy and security settings in the light theme" /></td>
+    <td align="center"><img src="screenshots/dark-theme.png" width="390" alt="HarvestTime settings in the dark theme" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Light theme</strong></td>
+    <td align="center"><strong>Dark theme</strong></td>
+  </tr>
+</table>
 
 The extension explains what is processed and where credentials live. If the companion stops, the
 normal work UI is replaced with a friendly reconnect screen instead of failing silently. A fresh
@@ -164,6 +205,11 @@ install sees Welcome and an in-panel Getting Started guide rather than a connect
 
 - [Node.js 22 or newer](https://nodejs.org/)
 - Git
+
+The installer creates an ordinary local checkout, installs locked production dependencies, and
+registers a per-user service. It does not require administrator access and does not hide the files
+it installs.
+
 - The HarvestTime Chrome extension
 
 The installer creates a local checkout, installs the exact locked dependencies with dependency
@@ -247,7 +293,70 @@ deletes or edits remote Harvest entries.
 
 ## Connect a Harvest account
 
-Copy the environment template:
+The easiest path is in the extension: open **Settings > Companion manager**. HarvestTime creates a
+single-use local link and opens the manager at `http://127.0.0.1:8787/setup`. From there you can:
+
+- open Harvest's developer page and paste a personal access token;
+- validate the token before it is saved;
+- choose the Harvest account to use;
+- inspect connection status and read-only previous-day summaries;
+- review optional Jira setup, matching rules, and companion health;
+- securely restart the installed background companion after changing `.env` or matching rules.
+
+<p align="center">
+  <img src="screenshots/companion-manager.png" width="900" alt="HarvestTime secure local companion manager showing guided Harvest setup and connection status" />
+</p>
+
+Connections shows Harvest and Jira readiness without returning stored credentials to the page.
+Optional Jira remains environment-managed and non-blocking.
+
+<p align="center">
+  <img src="screenshots/companion-connections.png" width="900" alt="HarvestTime companion manager connection status and optional Jira guidance" />
+</p>
+
+The previous-day History view is read-only: it shows what reached Harvest, marks overlapping or
+incomplete local time, and filters entries needing review. Removing history clears only locally
+stored previous days; it does not affect today, settings, credentials, caches, or Harvest entries.
+
+<p align="center">
+  <img src="screenshots/companion-history.png" width="900" alt="HarvestTime companion manager previous-day history and needs-review filters" />
+</p>
+
+The remaining manager areas make detection and service behaviour inspectable. Matching shows the
+ticket pattern and recognised hosts used for future evidence. Health shows the exact loopback
+service, version, uptime, local data directory, session expiry, and whether supervised restart is
+available.
+
+<table>
+  <tr>
+    <td align="center"><img src="screenshots/companion-matching.png" width="430" alt="HarvestTime companion manager ticket matching rules" /></td>
+    <td align="center"><img src="screenshots/companion-health.png" width="430" alt="HarvestTime companion manager local service health and restart controls" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Matching rules</strong></td>
+    <td align="center"><strong>Health and restart</strong></td>
+  </tr>
+</table>
+
+The manager is responsive down to the same narrow widths used to stress-test the extension UI.
+
+<p align="center">
+  <img src="screenshots/companion-manager-mobile.png" width="320" alt="Responsive HarvestTime companion manager setup view" />
+</p>
+
+Typing the setup address directly does not reveal private settings. The link must be created by the
+extension, expires after 60 seconds, and becomes a short-lived local session. PAT setup is stored in
+the companion's private JSON file; the manager never rewrites `.env`. When a production companion
+is used with an unpacked extension, that first button click pairs and stores the exact extension
+origin in `config.json`; a different extension ID is rejected afterward.
+
+On an installed background service, **Health > Restart companion** asks for confirmation and then
+requests a fresh process from the service supervisor. This reloads `.env` and saved configuration
+without deleting local data or changing Harvest entries. The restart ends the short-lived manager
+session, so wait a few seconds and reopen **Settings > Companion manager** from the extension. A
+foreground `npm run start` process has no supervisor and keeps the command-line fallback visible.
+
+For environment-managed OAuth, copy the environment template:
 
 ```sh
 cp .env.example .env
@@ -269,11 +378,14 @@ HARVEST_REDIRECT_URI=http://127.0.0.1:8787/auth/harvest/callback
 ```
 
 Restart the service, choose **Connect with Harvest** in the extension, and select the Harvest
-account. A personal access token remains available as a local fallback when OAuth is unavailable.
+account. Environment values remain authoritative; the manager reports them as companion-managed
+and does not reveal or overwrite them.
 
 ## Optional Jira enrichment
 
-Add these values to `.env` only when verified Jira metadata is wanted:
+Jira remains an advanced, environment-managed option while its public authentication policy is
+being finalized. Create an Atlassian API token from your Atlassian account security page, then add
+these values to `.env` only when verified Jira metadata is wanted:
 
 ```sh
 JIRA_VERIFY_ISSUES=true
@@ -312,6 +424,7 @@ Run these inside the companion directory, or use
 | `npm run service:install`   | Install or refresh the per-user login service.               |
 | `npm run service:uninstall` | Remove automatic startup while preserving settings and data. |
 | `npm run smoke`             | Start an isolated instance and verify its health endpoint.   |
+| `npm run smoke:supervisor`  | Verify restart recovery and `.env` reload under supervision. |
 
 ## Local files
 

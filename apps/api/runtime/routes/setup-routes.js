@@ -48,7 +48,7 @@ export const setupRoutes = async (app, options) => {
         return SetupStatusResponseSchema.parse(await getSetupStatus(options));
     });
 };
-async function getSetupStatus(options) {
+export async function getSetupStatus(options) {
     const [config, accessToken, authStatus] = await Promise.all([
         options.backendConfigService?.loadConfig(),
         options.harvestAuthService.getAccessToken(),
@@ -73,14 +73,14 @@ async function getSetupStatus(options) {
         missing: mode === "mock" ? [] : missing
     });
 }
-async function loadAccountsForSavedToken(options) {
+export async function loadAccountsForSavedToken(options) {
     const accessToken = await options.harvestAuthService.getAccessToken();
     if (!accessToken) {
         throw new HttpError(409, "HARVEST_TOKEN_INVALID", "Save a valid Harvest token before loading accounts");
     }
     return loadAccountsForToken(options.harvestClient, accessToken);
 }
-async function loadAccountsForToken(harvestClient, accessToken) {
+export async function loadAccountsForToken(harvestClient, accessToken) {
     try {
         const accounts = await harvestClient.listAccounts(accessToken);
         if (accounts.accounts.length === 0) {

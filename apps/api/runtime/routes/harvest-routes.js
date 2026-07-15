@@ -9,7 +9,14 @@ export const harvestRoutes = async (app, options) => {
     });
     app.post(apiRoutes.harvest.timeEntries, async (request, reply) => {
         const body = CreateTimeEntryRequestSchema.parse(request.body);
-        const timeEntry = await options.harvestClient.createTimeEntry(body);
+        const { externalReference: requestedReference, ticketKey, ...timeEntryInput } = body;
+        const externalReference = ticketKey
+            ? options.harvestReferencePolicy.fromTicketKey(ticketKey)
+            : options.harvestReferencePolicy.sanitize(requestedReference);
+        const timeEntry = await options.harvestClient.createTimeEntry({
+            ...timeEntryInput,
+            ...(externalReference ? { externalReference } : {})
+        });
         return reply.status(201).send(timeEntry);
     });
     app.patch(apiRoutes.harvest.stopTimeEntry(), async (request) => {

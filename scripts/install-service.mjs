@@ -110,7 +110,8 @@ WantedBy=default.target
 `
   );
   await exec("systemctl", ["--user", "daemon-reload"]);
-  await exec("systemctl", ["--user", "enable", "--now", "harvest-time-companion"]);
+  await exec("systemctl", ["--user", "enable", "harvest-time-companion"]);
+  await exec("systemctl", ["--user", "restart", "harvest-time-companion"]);
 }
 
 async function installScheduledTask() {

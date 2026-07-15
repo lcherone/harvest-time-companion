@@ -182,6 +182,7 @@ export class HarvestAuthService {
             ready: Boolean(credentials),
             source: credentials?.source ?? "none",
             oauthClientConfigured: hasHarvestOAuthClient(this.config),
+            disconnectAllowed: Boolean(credentials) && !this.config.HARVEST_ACCESS_TOKEN,
             accountId: credentials?.accountId ?? null,
             connectUrl: apiRoutes.harvestAuth.start
         };

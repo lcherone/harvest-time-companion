@@ -47,6 +47,22 @@ export class ContextDetector {
             this.findTicketKeyInEvidence([payload.title, payload.url]);
         const parsedUrl = payload.url ? parseTabUrl(payload.url) : null;
         const title = normalizeWhitespace(payload.title) ?? key ?? normalizeWhitespace(payload.key);
+        if (parsedUrl &&
+            (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") &&
+            !matchesHostRule(parsedUrl.hostname, this.jiraHosts)) {
+            return {
+                id: "unknown",
+                trackable: false,
+                kind: "unknown",
+                source: "unknown",
+                confidence: 0,
+                detectedAt,
+                title: title ?? undefined,
+                url: payload.url,
+                host: parsedUrl.hostname,
+                reason: "Clipboard URL was not a supported Jira issue"
+            };
+        }
         if (!key) {
             return {
                 id: "unknown",
@@ -117,6 +133,7 @@ export class ContextDetector {
         const ticketKey = this.findTicketKeyInEvidence([title, payload.url]);
         const key = ticketKey ?? githubKey;
         const fallbackTitle = `${githubKey} ${label}`;
+        const githubTitle = normalizeGitHubTitle(title) ?? fallbackTitle;
         return this.createTrackableContext({
             id: ticketKey
                 ? `ticket:${ticketKey}`
@@ -124,7 +141,7 @@ export class ContextDetector {
             kind,
             source: "github",
             key,
-            title: title ?? fallbackTitle,
+            title: githubTitle,
             url: payload.url,
             host: parsedUrl.hostname,
             confidence: ticketKey ? 0.92 : 0.88,
@@ -247,6 +264,12 @@ function parseTabUrl(value) {
 function normalizeWhitespace(value) {
     const normalized = value?.replace(/\s+/g, " ").trim();
     return normalized ? normalized : null;
+}
+function normalizeGitHubTitle(value) {
+    return normalizeWhitespace(value
+        ?.replace(/\s+by\s+.+?\s+·\s+Pull Request\s+#\d+\s+·\s+.+$/i, "")
+        .replace(/\s+·\s+Pull Request\s+#\d+\s+·\s+.+$/i, "")
+        .replace(/\s+·\s+Issue\s+#\d+\s+·\s+.+$/i, ""));
 }
 function normalizeTicketKey(value) {
     if (!value) {

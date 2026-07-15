@@ -56,6 +56,7 @@ export const DailyStoreFileSchema = z.object({
     harvestEntries: z.array(MockHarvestTimeEntrySchema),
     manualEntries: z.array(ManualDailyReviewEntrySchema).default([]),
     dismissedReviewEntryIds: z.array(z.string().min(1)).default([]),
+    dismissedHistoryItemKeys: z.array(z.string().min(1)).default([]),
     historyItems: z.array(BrowserHistoryItemSchema).optional(),
     events: z.array(DailyStoreTimelineEventSchema)
 });
@@ -147,6 +148,7 @@ export function createInitialDailyStore(date, now = new Date()) {
         harvestEntries: [],
         manualEntries: [],
         dismissedReviewEntryIds: [],
+        dismissedHistoryItemKeys: [],
         historyItems: [],
         events: []
     };
